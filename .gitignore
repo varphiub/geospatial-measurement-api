@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Django
+db.sqlite3
+media/
+*.log
+
+# Local temp and test artifacts
+.local_tmp/
+measurements/test_media/
+
+# Environment and secrets
+.env
+.env.*
+*.pem
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+Thumbs.db
+.Desktop.ini
+
+# Pyright / tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

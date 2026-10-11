@@ -1,0 +1,19 @@
+{
+  "venvPath": ".",
+  "venv": "venv",
+  "include": [
+    "config",
+    "measurements",
+    "manage.py",
+    "test_service.py"
+  ],
+  "exclude": [
+    "venv",
+    "**/__pycache__",
+    "media",
+    ".local_tmp"
+  ],
+  "typeCheckingMode": "basic",
+  "reportMissingModuleSource": "none",
+  "reportMissingTypeStubs": "none"
+}

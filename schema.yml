@@ -1,0 +1,589 @@
+openapi: 3.0.3
+info:
+  title: Geospatial File Measurement API
+  version: 1.0.0
+  description: REST API that accepts geospatial files (KML and Shapefile ZIP), extracts
+    geometries and feature attributes, calculates accurate metric area or length measurements
+    using appropriate local projected coordinate systems (e.g. UTM), stores the results
+    in SQLite, and exposes them through documented endpoints.
+paths:
+  /api/files/:
+    post:
+      operationId: upload_geospatial_file
+      description: Accepts a multipart file upload containing a .kml file or a .zip
+        archive with an ESRI Shapefile (.shp, .shx, and .dbf required). The service
+        extracts vector features, transforms them into a suitable local projected
+        coordinate reference system (e.g. UTM), calculates metric area (square metres
+        and hectares for polygons) or length (metres and kilometres for lines), and
+        stores metadata and measurements in the database.
+      summary: Upload and process a geospatial file
+      tags:
+      - File Uploads
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/GeospatialFileUploadRequest'
+        required: true
+      security:
+      - {}
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GeospatialFileUploadResponse'
+              examples:
+                KMLUploadResponse:
+                  value:
+                    id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                    filename: sample_parcel.kml
+                    file_format: kml
+                    original_crs: EPSG:4326
+                    measurement_crs: EPSG:32643
+                    feature_count: 1
+                    status: completed
+                  summary: KML Upload Response
+                ShapefileZIPUploadResponse:
+                  value:
+                    id: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
+                    filename: parcels.zip
+                    file_format: zip
+                    original_crs: EPSG:4326
+                    measurement_crs: EPSG:32643
+                    feature_count: 3
+                    status: completed
+                  summary: Shapefile ZIP Upload Response
+          description: File successfully processed and persisted in the database.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileValidationError'
+              examples:
+                UnsupportedFormat:
+                  value:
+                    file:
+                    - Only .kml and .zip (Shapefile) files are accepted.
+                  summary: Unsupported Format
+                CorruptOrMissingArchiveComponents:
+                  value:
+                    detail: Shapefile is missing .shx.
+                  summary: Corrupt or Missing Archive Components
+                MissingCRS:
+                  value:
+                    detail: The file has no CRS. Measurement cannot be calculated
+                      reliably without coordinate reference information.
+                  summary: Missing CRS
+          description: Invalid upload (unsupported format, missing file, corrupt archive,
+            or invalid geometry).
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                DatabasePersistenceFailure:
+                  value:
+                    detail: Processing failed while saving results. No file record
+                      was stored.
+                  summary: Database Persistence Failure
+          description: Internal processing or database failure; transaction rolled
+            back.
+  /api/files/{file_id}/:
+    get:
+      operationId: get_file_metadata
+      description: Retrieves record metadata for a previously uploaded geospatial
+        file, including original filename, detected format, coordinate reference systems,
+        total feature count, processing status, and timestamp.
+      summary: Retrieve uploaded file metadata
+      parameters:
+      - in: path
+        name: file_id
+        schema:
+          type: string
+          format: uuid
+        description: UUID identifier of the geospatial file record
+        required: true
+      tags:
+      - File Metadata
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GeospatialFileDetail'
+              examples:
+                CompletedFileMetadata:
+                  value:
+                    id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                    original_filename: sample_parcel.kml
+                    file_format: kml
+                    original_crs: EPSG:4326
+                    measurement_crs: EPSG:32643
+                    feature_count: 1
+                    status: completed
+                    created_at: '2026-10-11T12:00:00Z'
+                    error_message: ''
+                  summary: Completed File Metadata
+          description: File metadata retrieved successfully.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                FileNotFound:
+                  value:
+                    detail: Not found.
+                  summary: File Not Found
+          description: Geospatial file with the specified UUID was not found.
+  /api/files/{file_id}/measurements/:
+    get:
+      operationId: get_file_measurements
+      description: Retrieves geometric measurements and feature properties for a specific
+        geospatial file by its UUID. For Polygons, area is returned in square metres
+        and hectares. For LineStrings, length is returned in metres and kilometres.
+        Points have null measurements. Results are paginated.
+      summary: Retrieve calculated measurements
+      parameters:
+      - in: path
+        name: file_id
+        schema:
+          type: string
+          format: uuid
+        description: UUID identifier of the geospatial file
+        required: true
+      - in: query
+        name: page
+        schema:
+          type: integer
+        description: 'Page number within the paginated result set (default: 1).'
+      - in: query
+        name: page_size
+        schema:
+          type: integer
+        description: 'Number of feature results to return per page (max: 200, default:
+          50).'
+      tags:
+      - Measurements
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileMeasurementsEnvelope'
+              examples:
+                PolygonMeasurementExample:
+                  value:
+                    file_id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                    original_filename: parcels.kml
+                    file_format: kml
+                    status: completed
+                    original_crs: EPSG:4326
+                    measurement_crs: EPSG:32643
+                    feature_count: 1
+                    count: 1
+                    next: null
+                    previous: null
+                    results:
+                    - feature_id: '0'
+                      geometry_type: Polygon
+                      geometry:
+                        type: Polygon
+                        coordinates:
+                        - - - 77.59
+                            - 12.97
+                          - - 77.591
+                            - 12.97
+                          - - 77.591
+                            - 12.971
+                          - - 77.59
+                            - 12.971
+                          - - 77.59
+                            - 12.97
+                      properties:
+                        name: Parcel A
+                        zone: Commercial
+                      area_sqm: 12016.97
+                      area_hectares: 1.2017
+                      length_m: null
+                      length_km: null
+                  summary: Polygon Measurement Example
+                LineStringMeasurementExample:
+                  value:
+                    file_id: 4bb95f64-5717-4562-b3fc-2c963f66afa7
+                    original_filename: roads.zip
+                    file_format: zip
+                    status: completed
+                    original_crs: EPSG:4326
+                    measurement_crs: EPSG:32643
+                    feature_count: 1
+                    count: 1
+                    next: null
+                    previous: null
+                    results:
+                    - feature_id: '0'
+                      geometry_type: LineString
+                      geometry:
+                        type: LineString
+                        coordinates:
+                        - - 77.59
+                          - 12.97
+                        - - 77.591
+                          - 12.97
+                        - - 77.591
+                          - 12.971
+                      properties:
+                        road_id: NH-44
+                        lanes: 4
+                      area_sqm: null
+                      area_hectares: null
+                      length_m: 155.04
+                      length_km: 0.155
+                  summary: LineString Measurement Example
+                PointMeasurement(NullValues):
+                  value:
+                    file_id: 5cc95f64-5717-4562-b3fc-2c963f66afa8
+                    original_filename: points.zip
+                    file_format: zip
+                    status: completed
+                    original_crs: EPSG:4326
+                    measurement_crs: EPSG:32643
+                    feature_count: 1
+                    count: 1
+                    next: null
+                    previous: null
+                    results:
+                    - feature_id: '0'
+                      geometry_type: Point
+                      geometry:
+                        type: Point
+                        coordinates:
+                        - 77.5905
+                        - 12.9705
+                      properties:
+                        station: Station A
+                        elevation: 920
+                      area_sqm: null
+                      area_hectares: null
+                      length_m: null
+                      length_km: null
+                  summary: Point Measurement (Null Values)
+          description: Paginated list of feature measurements and file CRS metadata.
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                FileNotFound:
+                  value:
+                    detail: Not found.
+                  summary: File Not Found
+          description: Geospatial file with the specified UUID was not found.
+  /api/health/:
+    get:
+      operationId: health_check
+      description: Confirms that the Geospatial File Measurement API is running and
+        operational.
+      summary: Health check
+      tags:
+      - Health
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthCheckResponse'
+              examples:
+                HealthyServiceResponse:
+                  value:
+                    status: success
+                    message: Geospatial Measurement API is running
+                  summary: Healthy Service Response
+          description: Service is healthy and ready to accept requests.
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      description: Standard error response format.
+      properties:
+        detail:
+          type: string
+          description: Human-readable description of the error
+      required:
+      - detail
+    FeatureMeasurement:
+      type: object
+      description: Feature geometry, original attributes, and calculated metric measurements.
+      properties:
+        feature_id:
+          type: string
+          description: Feature identifier or index from the source dataset
+        geometry_type:
+          type: string
+          nullable: true
+          description: Geometry type (e.g. Polygon, MultiPolygon, LineString, Point)
+        geometry:
+          nullable: true
+          description: GeoJSON-compatible geometry dictionary with coordinates
+        properties:
+          description: Key-value dictionary of original feature attributes
+        area_sqm:
+          type: number
+          format: double
+          nullable: true
+          description: Calculated planar area in square metres (polygons only; null
+            for lines and points)
+        area_hectares:
+          type: number
+          format: double
+          nullable: true
+          description: Calculated area in hectares (area_sqm / 10000; null for lines
+            and points)
+        length_m:
+          type: number
+          format: double
+          nullable: true
+          description: Calculated planar length in metres (lines only; null for polygons
+            and points)
+        length_km:
+          type: number
+          format: double
+          nullable: true
+          description: Calculated length in kilometres (length_m / 1000; null for
+            polygons and points)
+      required:
+      - area_hectares
+      - area_sqm
+      - feature_id
+      - geometry
+      - geometry_type
+      - length_km
+      - length_m
+      - properties
+    FileFormatEnum:
+      enum:
+      - kml
+      - zip
+      type: string
+      description: |-
+        * `kml` - KML
+        * `zip` - Shapefile ZIP
+    FileMeasurementsEnvelope:
+      type: object
+      description: File metadata envelope containing paginated feature measurements.
+      properties:
+        file_id:
+          type: string
+          format: uuid
+          description: Unique identifier of the geospatial file record
+        original_filename:
+          type: string
+          description: Original uploaded filename
+        file_format:
+          type: string
+          description: File format ('kml' or 'zip')
+        status:
+          type: string
+          description: Processing status ('completed', 'failed', etc.)
+        original_crs:
+          type: string
+          nullable: true
+          description: Original Coordinate Reference System of the dataset
+        measurement_crs:
+          type: string
+          nullable: true
+          description: Projected CRS used for metric measurements
+        feature_count:
+          type: integer
+          description: Total number of features in the dataset
+        count:
+          type: integer
+          description: Total number of features available across all pages
+        next:
+          type: string
+          nullable: true
+          description: URL to the next page of results, or null if on the last page
+        previous:
+          type: string
+          nullable: true
+          description: URL to the previous page of results, or null if on the first
+            page
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/FeatureMeasurement'
+          description: Page of feature measurement items
+      required:
+      - count
+      - feature_count
+      - file_format
+      - file_id
+      - measurement_crs
+      - next
+      - original_crs
+      - original_filename
+      - previous
+      - results
+      - status
+    FileValidationError:
+      type: object
+      description: Validation failure response format for file upload.
+      properties:
+        file:
+          type: array
+          items:
+            type: string
+          description: Validation error messages associated with the 'file' field
+        detail:
+          type: string
+          description: General validation or processing error message
+    GeospatialFileDetail:
+      type: object
+      description: File metadata record and processing status.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        original_filename:
+          type: string
+          readOnly: true
+        file_format:
+          allOf:
+          - $ref: '#/components/schemas/FileFormatEnum'
+          readOnly: true
+        original_crs:
+          type: string
+          readOnly: true
+          nullable: true
+        measurement_crs:
+          type: string
+          readOnly: true
+          nullable: true
+        feature_count:
+          type: integer
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusEnum'
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        error_message:
+          type: string
+          readOnly: true
+      required:
+      - created_at
+      - error_message
+      - feature_count
+      - file_format
+      - id
+      - measurement_crs
+      - original_crs
+      - original_filename
+      - status
+    GeospatialFileUploadRequest:
+      type: object
+      description: Validate multipart uploads before geospatial processing.
+      properties:
+        file:
+          type: string
+          format: binary
+          description: 'Geospatial file to upload. Supported formats: .kml, .zip (Shapefile
+            archive containing .shp, .shx, and .dbf). Max 25 MB.'
+      required:
+      - file
+    GeospatialFileUploadResponse:
+      type: object
+      description: Summary returned immediately upon successful upload and processing.
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier of the persisted geospatial file record
+        filename:
+          type: string
+          description: Original uploaded filename
+        file_format:
+          allOf:
+          - $ref: '#/components/schemas/FileFormatEnum'
+          description: |-
+            Detected format: 'kml' or 'zip'
+
+            * `kml` - KML
+            * `zip` - Shapefile ZIP
+        original_crs:
+          type: string
+          nullable: true
+          description: Original Coordinate Reference System detected in file (e.g.
+            EPSG:4326)
+        measurement_crs:
+          type: string
+          nullable: true
+          description: Projected CRS used for metric calculations (e.g. EPSG:32643)
+        feature_count:
+          type: integer
+          description: Total number of features extracted and persisted
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusEnum'
+          description: |-
+            Processing status ('completed', 'failed', etc.)
+
+            * `pending` - Pending
+            * `processing` - Processing
+            * `completed` - Completed
+            * `failed` - Failed
+      required:
+      - feature_count
+      - file_format
+      - filename
+      - id
+      - measurement_crs
+      - original_crs
+      - status
+    HealthCheckResponse:
+      type: object
+      description: Response serializer for API health check.
+      properties:
+        status:
+          type: string
+          description: Operational status of the service (e.g. 'success')
+        message:
+          type: string
+          description: Status message confirming service availability
+      required:
+      - message
+      - status
+    StatusEnum:
+      enum:
+      - pending
+      - processing
+      - completed
+      - failed
+      type: string
+      description: |-
+        * `pending` - Pending
+        * `processing` - Processing
+        * `completed` - Completed
+        * `failed` - Failed
+tags:
+- name: Health
+  description: API service health check endpoints
+- name: File Uploads
+  description: Upload and process geospatial files
+- name: File Metadata
+  description: Retrieve uploaded file details and processing status
+- name: Measurements
+  description: Retrieve calculated geometric measurements
